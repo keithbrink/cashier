@@ -72,12 +72,18 @@ class SubscriptionBuilder
     protected $metadata;
 
     /**
+     * The Stripe Connect application fee to apply to the subscription.
+     *
+     * @var int|null
+     */
+    protected $application_fee_percent = null;
+
+    /**
      * Create a new subscription builder instance.
      *
-     * @param  mixed  $owner
-     * @param  string  $name
-     * @param  string  $plan
-     * @return void
+     * @param mixed  $owner
+     * @param string $name
+     * @param string $plan
      */
     public function __construct($owner, $name, $plan)
     {
@@ -89,7 +95,8 @@ class SubscriptionBuilder
     /**
      * Specify the quantity of the subscription.
      *
-     * @param  int  $quantity
+     * @param int $quantity
+     *
      * @return $this
      */
     public function quantity($quantity)
@@ -102,7 +109,8 @@ class SubscriptionBuilder
     /**
      * Specify the number of days of the trial.
      *
-     * @param  int  $trialDays
+     * @param int $trialDays
+     *
      * @return $this
      */
     public function trialDays($trialDays)
@@ -115,7 +123,8 @@ class SubscriptionBuilder
     /**
      * Specify the ending date of the trial.
      *
-     * @param  \Carbon\Carbon|\Carbon\CarbonInterface  $trialUntil
+     * @param \Carbon\Carbon|\Carbon\CarbonInterface $trialUntil
+     *
      * @return $this
      */
     public function trialUntil($trialUntil)
@@ -140,7 +149,8 @@ class SubscriptionBuilder
     /**
      * Change the billing cycle anchor on a plan creation.
      *
-     * @param  \DateTimeInterface|int  $date
+     * @param \DateTimeInterface|int $date
+     *
      * @return $this
      */
     public function anchorBillingCycleOn($date)
@@ -157,7 +167,8 @@ class SubscriptionBuilder
     /**
      * The coupon to apply to a new subscription.
      *
-     * @param  string  $coupon
+     * @param string $coupon
+     *
      * @return $this
      */
     public function withCoupon($coupon)
@@ -170,7 +181,8 @@ class SubscriptionBuilder
     /**
      * The metadata to apply to a new subscription.
      *
-     * @param  array  $metadata
+     * @param array $metadata
+     *
      * @return $this
      */
     public function withMetadata($metadata)
@@ -183,7 +195,8 @@ class SubscriptionBuilder
     /**
      * Add a new Stripe subscription to the Stripe model.
      *
-     * @param  array  $options
+     * @param array $options
+     *
      * @return \Laravel\Cashier\Subscription
      */
     public function add(array $options = [])
@@ -192,10 +205,25 @@ class SubscriptionBuilder
     }
 
     /**
+     * If you are using Stripe Connect, you can add an application fee to the subscription.
+     *
+     * @param int $percentage
+     *
+     * @return \Laravel\Cashier\Subscription
+     */
+    public function applicationFeePercent($percentage)
+    {
+        $this->application_fee_percent = $percentage;
+
+        return $this;
+    }
+
+    /**
      * Create a new Stripe subscription.
      *
-     * @param  string|null  $token
-     * @param  array  $options
+     * @param string|null $token
+     * @param array       $options
+     *
      * @return \Laravel\Cashier\Subscription
      */
     public function create($token = null, array $options = [])
@@ -229,8 +257,9 @@ class SubscriptionBuilder
     /**
      * Get the Stripe customer instance for the current user and token.
      *
-     * @param  string|null  $token
-     * @param  array  $options
+     * @param string|null $token
+     * @param array       $options
+     *
      * @return \Stripe\Customer
      */
     protected function getStripeCustomer($token = null, array $options = [])
@@ -263,6 +292,7 @@ class SubscriptionBuilder
             'quantity' => $this->quantity,
             'tax_percent' => $this->getTaxPercentageForPayload(),
             'trial_end' => $this->getTrialEndForPayload(),
+            'application_fee_percent' => $this->application_fee_percent,
         ]);
     }
 

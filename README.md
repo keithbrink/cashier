@@ -11,6 +11,45 @@
 
 Laravel Cashier provides an expressive, fluent interface to [Stripe's](https://stripe.com) subscription billing services. It handles almost all of the boilerplate subscription billing code you are dreading writing. In addition to basic subscription management, Cashier can handle coupons, swapping subscription, subscription "quantities", cancellation grace periods, and even generate invoice PDFs.
 
+## This Fork - Stripe Connect
+
+This fork of Cashier allows you to use some of Stripe's Connect functionality. To use this package, you should add it as a repository in your composer.json:
+
+```bash
+"repositories": [
+    {
+        "type": "vcs",
+        "url": "https://github.com/keithbrink/cashier"
+    }
+]
+```
+
+and then update the Cashier package to use the connect branch of this package:
+
+```bash
+"require": {
+    "laravel/cashier": "dev-connect"
+}
+```
+
+Once installed, you can use Cashier like normal, but you can add a billing account:
+
+```bash
+$user->billingAccount($account_id)->subscription('main');
+```
+
+and an application fee can be added to a subscription:
+
+```bash
+$user
+    ->billingAccount($account_id)
+    ->newSubscription('main', $subscription_id)
+    ->applicationFeePercent($application_fee_percent)
+    ->create($token);
+```
+
+When running tests, add an env value for STRIPE_CONNECT_ACCOUNT_ID.
+
 ## Official Documentation
 
 
