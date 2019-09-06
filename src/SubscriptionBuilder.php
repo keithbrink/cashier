@@ -220,8 +220,9 @@ class SubscriptionBuilder
     /**
      * Create a new Stripe subscription.
      *
-     * @param  \Stripe\PaymentMethod|string|null  $paymentMethod
-     * @param  array  $options
+     * @param \Stripe\PaymentMethod|string|null $paymentMethod
+     * @param array                             $options
+     *
      * @return \Laravel\Cashier\Subscription
      */
     public function create($paymentMethod = null, array $options = [])
@@ -259,8 +260,9 @@ class SubscriptionBuilder
     /**
      * Get the Stripe customer instance for the current user and payment method.
      *
-     * @param  \Stripe\PaymentMethod|string|null  $paymentMethod
-     * @param  array  $options
+     * @param \Stripe\PaymentMethod|string|null $paymentMethod
+     * @param array                             $options
+     *
      * @return \Stripe\Customer
      */
     protected function getStripeCustomer($paymentMethod = null, array $options = [])
@@ -290,6 +292,7 @@ class SubscriptionBuilder
             'quantity' => $this->quantity,
             'tax_percent' => $this->getTaxPercentageForPayload(),
             'trial_end' => $this->getTrialEndForPayload(),
+            'application_fee_percent' => $this->application_fee_percent,
             'off_session' => true,
         ]);
     }
