@@ -63,11 +63,11 @@ class Invoice
     /**
      * Get the raw total amount that was paid (or will be paid).
      *
-     * @return float
+     * @return int
      */
     public function rawTotal()
     {
-        return max(0, $this->invoice->total - ($this->rawStartingBalance() * -1));
+        return $this->invoice->total + $this->rawStartingBalance();
     }
 
     /**
@@ -77,9 +77,7 @@ class Invoice
      */
     public function subtotal()
     {
-        return $this->formatAmount(
-            max(0, $this->invoice->subtotal - ($this->rawStartingBalance() * -1))
-        );
+        return $this->formatAmount($this->invoice->subtotal);
     }
 
     /**
@@ -100,6 +98,16 @@ class Invoice
     public function startingBalance()
     {
         return $this->formatAmount($this->rawStartingBalance());
+    }
+
+    /**
+     * Get the raw starting balance for the invoice.
+     *
+     * @return int
+     */
+    public function rawStartingBalance()
+    {
+        return $this->invoice->starting_balance ?? 0;
     }
 
     /**
@@ -175,6 +183,16 @@ class Invoice
     }
 
     /**
+     * Get the tax total amount.
+     *
+     * @return string
+     */
+    public function tax()
+    {
+        return $this->formatAmount($this->invoice->tax);
+    }
+
+    /**
      * Get all of the "invoice item" line items.
      *
      * @return array
@@ -216,14 +234,14 @@ class Invoice
     }
 
     /**
-     * Format the given amount into a string based on the Stripe model's preferences.
+     * Format the given amount into a displayable currency.
      *
      * @param  int  $amount
      * @return string
      */
     protected function formatAmount($amount)
     {
-        return Cashier::formatAmount($amount);
+        return Cashier::formatAmount($amount, $this->invoice->currency);
     }
 
     /**
@@ -254,6 +272,7 @@ class Invoice
         }
 
         $dompdf = new Dompdf;
+        $dompdf->setPaper(config('cashier.paper', 'letter'));
         $dompdf->loadHtml($this->view($data)->render());
         $dompdf->render();
 
@@ -268,26 +287,27 @@ class Invoice
      */
     public function download(array $data)
     {
-        $filename = $data['product'].'_'.$this->date()->month.'_'.$this->date()->year.'.pdf';
+        $filename = $data['product'].'_'.$this->date()->month.'_'.$this->date()->year;
 
-        return new Response($this->pdf($data), 200, [
-            'Content-Description' => 'File Transfer',
-            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
-            'Content-Transfer-Encoding' => 'binary',
-            'Content-Type' => 'application/pdf',
-        ]);
+        return $this->downloadAs($filename, $data);
     }
 
     /**
-     * Get the raw starting balance for the invoice.
+     * Create an invoice download response with a specific filename.
      *
-     * @return float
+     * @param  string  $filename
+     * @param  array  $data
+     * @return \Symfony\Component\HttpFoundation\Response
      */
-    public function rawStartingBalance()
+    public function downloadAs($filename, array $data)
     {
-        return isset($this->invoice->starting_balance)
-            ? $this->invoice->starting_balance
-            : 0;
+        return new Response($this->pdf($data), 200, [
+            'Content-Description' => 'File Transfer',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'.pdf"',
+            'Content-Transfer-Encoding' => 'binary',
+            'Content-Type' => 'application/pdf',
+            'X-Vapor-Base64-Encode' => 'True',
+        ]);
     }
 
     /**

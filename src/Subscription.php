@@ -5,8 +5,10 @@ namespace Laravel\Cashier;
 use Carbon\Carbon;
 use LogicException;
 use DateTimeInterface;
-use Stripe\Error\Card as StripeCard;
 use Illuminate\Database\Eloquent\Model;
+use Stripe\Subscription as StripeSubscription;
+use Laravel\Cashier\Exceptions\IncompletePayment;
+use Laravel\Cashier\Exceptions\SubscriptionUpdateFailure;
 
 class Subscription extends Model
 {
@@ -58,9 +60,9 @@ class Subscription extends Model
      */
     public function owner()
     {
-        $class = Cashier::stripeModel();
+        $model = config('cashier.model');
 
-        return $this->belongsTo($class, (new $class)->getForeignKey());
+        return $this->belongsTo($model, (new $model)->getForeignKey());
     }
 
     /**
@@ -74,13 +76,59 @@ class Subscription extends Model
     }
 
     /**
+     * Determine if the subscription is incomplete.
+     *
+     * @return bool
+     */
+    public function incomplete()
+    {
+        return $this->stripe_status === 'incomplete';
+    }
+
+    /**
+     * Filter query by incomplete.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return void
+     */
+    public function scopeIncomplete($query)
+    {
+        $query->where('stripe_status', 'incomplete');
+    }
+
+    /**
+     * Determine if the subscription is past due.
+     *
+     * @return bool
+     */
+    public function pastDue()
+    {
+        return $this->stripe_status === 'past_due';
+    }
+
+    /**
+     * Filter query by past due.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return void
+     */
+    public function scopePastDue($query)
+    {
+        $query->where('stripe_status', 'past_due');
+    }
+
+    /**
      * Determine if the subscription is active.
      *
      * @return bool
      */
     public function active()
     {
-        return is_null($this->ends_at) || $this->onGracePeriod();
+        return (is_null($this->ends_at) || $this->onGracePeriod()) &&
+            $this->stripe_status !== 'incomplete' &&
+            $this->stripe_status !== 'incomplete_expired' &&
+            $this->stripe_status !== 'past_due' &&
+            $this->stripe_status !== 'unpaid';
     }
 
     /**
@@ -91,9 +139,29 @@ class Subscription extends Model
      */
     public function scopeActive($query)
     {
-        $query->whereNull('ends_at')->orWhere(function ($query) {
-            $query->onGracePeriod();
-        });
+        $query->where(function ($query) {
+            $query->whereNull('ends_at')
+                ->orWhere(function ($query) {
+                    $query->onGracePeriod();
+                });
+        })->where('stripe_status', '!=', 'incomplete')
+            ->where('stripe_status', '!=', 'incomplete_expired')
+            ->where('stripe_status', '!=', 'past_due')
+            ->where('stripe_status', '!=', 'unpaid');
+    }
+
+    /**
+     * Sync the Stripe status of the subscription.
+     *
+     * @return void
+     */
+    public function syncStripeStatus()
+    {
+        $subscription = $this->asStripeSubscription();
+
+        $this->stripe_status = $subscription->status;
+
+        $this->save();
     }
 
     /**
@@ -239,6 +307,8 @@ class Subscription extends Model
      *
      * @param  int  $count
      * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
      */
     public function incrementQuantity($count = 1)
     {
@@ -252,12 +322,15 @@ class Subscription extends Model
      *
      * @param  int  $count
      * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\IncompletePayment
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
      */
     public function incrementAndInvoice($count = 1)
     {
         $this->incrementQuantity($count);
 
-        $this->user->invoice(['subscription' => $this->stripe_id]);
+        $this->invoice();
 
         return $this;
     }
@@ -267,6 +340,8 @@ class Subscription extends Model
      *
      * @param  int  $count
      * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
      */
     public function decrementQuantity($count = 1)
     {
@@ -279,11 +354,16 @@ class Subscription extends Model
      * Update the quantity of the subscription.
      *
      * @param  int  $quantity
-     * @param  \Stripe\Customer|null  $customer
      * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
      */
-    public function updateQuantity($quantity, $customer = null)
+    public function updateQuantity($quantity)
     {
+        if ($this->incomplete()) {
+            throw SubscriptionUpdateFailure::incompleteSubscription($this);
+        }
+
         $subscription = $this->asStripeSubscription();
 
         $subscription->quantity = $quantity;
@@ -346,10 +426,17 @@ class Subscription extends Model
      * Swap the subscription to a new Stripe plan.
      *
      * @param  string  $plan
+     * @param  array  $options
      * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
      */
-    public function swap($plan)
+    public function swap($plan, $options = [])
     {
+        if ($this->incomplete()) {
+            throw SubscriptionUpdateFailure::incompleteSubscription($this);
+        }
+
         $subscription = $this->asStripeSubscription();
 
         $subscription->plan = $plan;
@@ -360,6 +447,10 @@ class Subscription extends Model
 
         if (! is_null($this->billingCycleAnchor)) {
             $subscription->billing_cycle_anchor = $this->billingCycleAnchor;
+        }
+
+        foreach ($options as $key => $option) {
+            $subscription->$key = $option;
         }
 
         // If no specific trial end date has been set, the default behavior should be
@@ -380,20 +471,31 @@ class Subscription extends Model
 
         $subscription->save();
 
-        try {
-            $this->user->invoice(['subscription' => $subscription->id]);
-        } catch (StripeCard $exception) {
-            // When the payment for the plan swap fails, we continue to let the user swap to the
-            // new plan. This is because Stripe may attempt to retry the payment later on. If
-            // all attempts to collect payment fail, webhooks will handle any update to it.
-        }
-
         $this->fill([
             'stripe_plan' => $plan,
             'ends_at' => null,
         ])->save();
 
         return $this;
+    }
+
+    /**
+     * Swap the subscription to a new Stripe plan, and invoice immediately.
+     *
+     * @param  string  $plan
+     * @param  array  $options
+     * @return $this
+     *
+     * @throws \Laravel\Cashier\Exceptions\IncompletePayment
+     * @throws \Laravel\Cashier\Exceptions\SubscriptionUpdateFailure
+     */
+    public function swapAndInvoice($plan, $options = [])
+    {
+        $subscription = $this->swap($plan, $options);
+
+        $this->invoice();
+
+        return $subscription;
     }
 
     /**
@@ -407,7 +509,9 @@ class Subscription extends Model
 
         $subscription->cancel_at_period_end = true;
 
-        $subscription->save();
+        $subscription = $subscription->save();
+
+        $this->stripe_status = $subscription->status;
 
         // If the user was on trial, we will set the grace period to end when the trial
         // would have ended. Otherwise, we'll retrieve the end of the billing period
@@ -448,7 +552,10 @@ class Subscription extends Model
      */
     public function markAsCancelled()
     {
-        $this->fill(['ends_at' => Carbon::now()])->save();
+        $this->fill([
+            'stripe_status' => 'canceled',
+            'ends_at' => Carbon::now(),
+        ])->save();
     }
 
     /**
@@ -478,14 +585,39 @@ class Subscription extends Model
             $subscription->trial_end = 'now';
         }
 
-        $subscription->save();
+        $subscription = $subscription->save();
 
         // Finally, we will remove the ending timestamp from the user's record in the
         // local database to indicate that the subscription is active again and is
         // no longer "cancelled". Then we will save this record in the database.
-        $this->fill(['ends_at' => null])->save();
+        $this->fill([
+            'stripe_status' => $subscription->status,
+            'ends_at' => null,
+        ])->save();
 
         return $this;
+    }
+
+    /**
+     * Invoice the subscription outside of the regular billing cycle.
+     *
+     * @param  array  $options
+     * @return \Laravel\Cashier\Invoice|bool
+     *
+     * @throws \Laravel\Cashier\Exceptions\IncompletePayment
+     */
+    public function invoice(array $options = [])
+    {
+        try {
+            return $this->user->invoice(array_merge($options, ['subscription' => $this->stripe_id]));
+        } catch (IncompletePayment $exception) {
+            // Set the new Stripe subscription status immediately when payment fails...
+            $this->fill([
+                'stripe_status' => $exception->payment->invoice->subscription->status,
+            ])->save();
+
+            throw $exception;
+        }
     }
 
     /**
@@ -503,19 +635,42 @@ class Subscription extends Model
     }
 
     /**
+     * Determine if the subscription has an incomplete payment.
+     *
+     * @return bool
+     */
+    public function hasIncompletePayment()
+    {
+        return $this->pastDue() || $this->incomplete();
+    }
+
+    /**
+     * Get the latest payment for a Subscription.
+     *
+     * @return \Laravel\Cashier\Payment|null
+     */
+    public function latestPayment()
+    {
+        $paymentIntent = $this->asStripeSubscription(['latest_invoice.payment_intent'])
+            ->latest_invoice
+            ->payment_intent;
+
+        return $paymentIntent
+            ? new Payment($paymentIntent)
+            : null;
+    }
+
+    /**
      * Get the subscription as a Stripe subscription object.
      *
+     * @param  array  $expand
      * @return \Stripe\Subscription
-     * @throws \LogicException
      */
-    public function asStripeSubscription()
+    public function asStripeSubscription(array $expand = [])
     {
-        $subscriptions = $this->user->asStripeCustomer()->subscriptions;
-
-        if (! $subscriptions) {
-            throw new LogicException('The Stripe customer does not have any subscriptions.');
-        }
-
-        return $subscriptions->retrieve($this->stripe_id);
+        return StripeSubscription::retrieve(
+            ['id' => $this->stripe_id, 'expand' => $expand],
+            $this->owner->stripeOptions()
+        );
     }
 }

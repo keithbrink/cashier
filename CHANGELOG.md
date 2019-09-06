@@ -1,6 +1,73 @@
 # Release Notes
 
-## [Unreleased](https://github.com/laravel/cashier/compare/v9.3.5...9.0)
+## [Unreleased](https://github.com/laravel/cashier/compare/v10.2.0...10.0)
+
+
+## [v10.2.0 (2019-09-03)](https://github.com/laravel/cashier/compare/v10.1.1...v10.2.0)
+
+### Added
+- Add ability to ignore cashier routes ([#763](https://github.com/laravel/cashier/pull/763))
+
+### Fixed
+- Only mount card element if payment has not succeeded or been cancelled ([#765](https://github.com/laravel/cashier/pull/765))
+- Set off_session parameter to true when creating a new subscription ([#764](https://github.com/laravel/cashier/pull/764))
+
+
+## [v10.1.1 (2019-08-27)](https://github.com/laravel/cashier/compare/v10.1.0...v10.1.1)
+
+### Fixed
+- Remove collation from migrations ([#761](https://github.com/laravel/cashier/pull/761))
+
+
+## [v10.1.0 (2019-08-20)](https://github.com/laravel/cashier/compare/v10.0.0...v10.1.0)
+
+### Added
+- Multiple stripe accounts ([#754](https://github.com/laravel/cashier/pull/754))
+- Set Stripe library info ([#756](https://github.com/laravel/cashier/pull/756))
+- Paper size can be set in config file ([#752](https://github.com/laravel/cashier/pull/752), [cb837d1](https://github.com/laravel/cashier/commit/cb837d13f570353b85b27bd381e8669d1fee3491))
+
+### Changed
+- Update Stripe API version to `2019-08-14` ([#749](https://github.com/laravel/cashier/pull/749))
+
+### Fixed
+- `syncStripeStatus` trying to update incorrect status column ([#748](https://github.com/laravel/cashier/pull/748))
+
+
+## [v10.0.0 (2019-08-13)](https://github.com/laravel/cashier/compare/v10.0.0-beta.2...v10.0.0)
+
+### Added
+- Allow hasIncompletePayment() to check other subscriptions than “default” ([#733](https://github.com/laravel/cashier/pull/733))
+- Add indexes to those columns used to lookup data in the database ([#739](https://github.com/laravel/cashier/pull/739))
+
+### Fixed
+- Fixed a label with an incorrect for attribute ([#732](https://github.com/laravel/cashier/pull/732))
+
+
+## [v10.0.0-beta.2 (2019-08-02)](https://github.com/laravel/cashier/compare/v10.0.0-beta...v10.0.0-beta.2)
+
+### Added
+- Add latestPayment method on Subscription ([#705](https://github.com/laravel/cashier/pull/705))
+- Allow custom filename for invoice download ([#723](https://github.com/laravel/cashier/pull/723))
+
+### Changed
+- Improve stripe statuses ([#707](https://github.com/laravel/cashier/pull/707))
+- Refactor active subscription state ([#712](https://github.com/laravel/cashier/pull/712))
+- Return invoice object when applicable ([#711](https://github.com/laravel/cashier/pull/711))
+- Refactor webhook responses ([#722](https://github.com/laravel/cashier/pull/722))
+- Refactor confirm payment mail to notification ([#727](https://github.com/laravel/cashier/pull/727))
+
+### Fixed
+- Fix createSetupIntent ([#704](https://github.com/laravel/cashier/pull/704))
+- Fix subscription invoicing ([#710](https://github.com/laravel/cashier/pull/710))
+- Fix `null` return for `latestPayment` method ([#730](https://github.com/laravel/cashier/pull/730))
+
+### Removed
+- Remove unused `$customer` parameter on `updateQuantity` method ([#729](https://github.com/laravel/cashier/pull/729))
+
+
+## [v10.0.0-beta (2019-07-17)](https://github.com/laravel/cashier/compare/v9.3.5...v10.0.0-beta)
+
+Cashier 10.0 is a major release. Please review [the upgrade guide](UPGRADE.md) thoroughly.
 
 
 ## [v9.3.5 (2019-07-30)](https://github.com/laravel/cashier/compare/v9.3.4...v9.3.5)

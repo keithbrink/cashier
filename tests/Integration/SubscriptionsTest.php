@@ -3,34 +3,18 @@
 namespace Laravel\Cashier\Tests\Integration;
 
 use DateTime;
-use Stripe\Card;
 use Stripe\Plan;
-use Stripe\Token;
 use Carbon\Carbon;
 use Stripe\Coupon;
-use Stripe\Stripe;
 use Stripe\Product;
-use Stripe\ApiResource;
 use Illuminate\Support\Str;
-use Illuminate\Http\Request;
-use Laravel\Cashier\Billable;
-use PHPUnit\Framework\TestCase;
-use Stripe\Error\InvalidRequest;
-use Illuminate\Database\Schema\Builder;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Database\ConnectionInterface;
-use Illuminate\Database\Capsule\Manager as DB;
-use Illuminate\Database\Eloquent\Model as Eloquent;
-use Laravel\Cashier\Http\Controllers\WebhookController;
-use Laravel\Cashier\Exceptions\SubscriptionCreationFailed;
+use Laravel\Cashier\Payment;
+use Laravel\Cashier\Subscription;
+use Laravel\Cashier\Exceptions\PaymentFailure;
+use Laravel\Cashier\Exceptions\PaymentActionRequired;
 
-class CashierTest extends TestCase
+class SubscriptionsTest extends IntegrationTestCase
 {
-    /**
-     * @var string
-     */
-    protected static $stripePrefix = 'cashier-test-';
-
     /**
      * @var string
      */
@@ -56,16 +40,10 @@ class CashierTest extends TestCase
      */
     protected static $couponId;
 
-    public static function setUpBeforeClass()
+    public static function setUpBeforeClass(): void
     {
-        Stripe::setApiVersion('2019-03-14');
-        Stripe::setApiKey(getenv('STRIPE_SECRET'));
+        parent::setUpBeforeClass();
 
-        static::setUpStripeTestData();
-    }
-
-    protected static function setUpStripeTestData()
-    {
         static::$productId = static::$stripePrefix.'product-1'.Str::random(10);
         static::$planId = static::$stripePrefix.'monthly-10-'.Str::random(10);
         static::$otherPlanId = static::$stripePrefix.'monthly-10-'.Str::random(10);
@@ -117,48 +95,7 @@ class CashierTest extends TestCase
         ]);
     }
 
-    public function setUp()
-    {
-        Eloquent::unguard();
-
-        $db = new DB;
-        $db->addConnection([
-            'driver' => 'sqlite',
-            'database' => ':memory:',
-        ]);
-        $db->bootEloquent();
-        $db->setAsGlobal();
-
-        $this->schema()->create('users', function (Blueprint $table) {
-            $table->increments('id');
-            $table->string('email');
-            $table->string('name');
-            $table->string('stripe_id')->nullable();
-            $table->string('card_brand')->nullable();
-            $table->string('card_last_four')->nullable();
-            $table->timestamps();
-        });
-
-        $this->schema()->create('subscriptions', function (Blueprint $table) {
-            $table->increments('id');
-            $table->integer('user_id');
-            $table->string('name');
-            $table->string('stripe_id');
-            $table->string('stripe_plan');
-            $table->integer('quantity');
-            $table->timestamp('trial_ends_at')->nullable();
-            $table->timestamp('ends_at')->nullable();
-            $table->timestamps();
-        });
-    }
-
-    public function tearDown()
-    {
-        $this->schema()->drop('users');
-        $this->schema()->drop('subscriptions');
-    }
-
-    public static function tearDownAfterClass()
+    public static function tearDownAfterClass(): void
     {
         parent::tearDownAfterClass();
 
@@ -169,24 +106,12 @@ class CashierTest extends TestCase
         static::deleteStripeResource(new Coupon(static::$couponId));
     }
 
-    protected static function deleteStripeResource(ApiResource $resource)
-    {
-        try {
-            $resource->delete();
-        } catch (InvalidRequest $e) {
-            //
-        }
-    }
-
     public function test_subscriptions_can_be_created()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('subscriptions_can_be_created');
 
         // Create Subscription
-        $user->newSubscription('main', static::$planId)->create($this->getTestToken());
+        $user->newSubscription('main', static::$planId)->create('pm_card_visa');
 
         $this->assertEquals(1, count($user->subscriptions));
         $this->assertNotNull($user->subscription('main')->stripe_id);
@@ -243,8 +168,8 @@ class CashierTest extends TestCase
 
         $this->assertEquals(1, $subscription->quantity);
 
-        // Swap Plan
-        $subscription->swap(static::$otherPlanId);
+        // Swap Plan and invoice immediately.
+        $subscription->swapAndInvoice(static::$otherPlanId);
 
         $this->assertEquals(static::$otherPlanId, $subscription->stripe_plan);
 
@@ -258,70 +183,157 @@ class CashierTest extends TestCase
         $this->assertInstanceOf(Carbon::class, $invoice->date());
     }
 
-    public function test_default_card_returns_null_when_not_customer()
+    public function test_swapping_subscription_with_coupon()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
+        $user = $this->createCustomer('swapping_subscription_with_coupon');
+        $user->newSubscription('main', static::$planId)->create('pm_card_visa');
+        $subscription = $user->subscription('main');
+
+        $subscription->swap(static::$otherPlanId, [
+            'coupon' => static::$couponId,
         ]);
 
-        // Assert that the defaultCard method returns null for billable models that are not stripe customers, and no exception is thrown
-        $this->assertNull($user->defaultCard());
+        $this->assertEquals(static::$couponId, $subscription->asStripeSubscription()->discount->coupon->id);
     }
 
-    public function test_creating_subscription_fails_when_card_is_declined()
+    public function test_declined_card_during_subscribing_results_in_an_exception()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('declined_card_during_subscribing_results_in_an_exception');
 
         try {
-            $user->newSubscription('main', static::$planId)->create($this->getInvalidCardToken());
+            $user->newSubscription('main', static::$planId)->create('pm_card_chargeCustomerFail');
 
-            $this->fail('Expected exception '.SubscriptionCreationFailed::class.' was not thrown.');
-        } catch (SubscriptionCreationFailed $e) {
-            // Assert no subscription was added to the billable entity.
-            $this->assertEmpty($user->subscriptions);
+            $this->fail('Expected exception '.PaymentFailure::class.' was not thrown.');
+        } catch (PaymentFailure $e) {
+            // Assert that the payment needs a valid payment method.
+            $this->assertTrue($e->payment->requiresPaymentMethod());
 
-            // Assert subscription was cancelled.
-            $this->assertEmpty($user->asStripeCustomer()->subscriptions->data);
+            // Assert subscription was added to the billable entity.
+            $this->assertInstanceOf(Subscription::class, $subscription = $user->subscription('main'));
+
+            // Assert subscription is incomplete.
+            $this->assertTrue($subscription->incomplete());
         }
     }
 
-    /**
-     * @group Swapping
-     */
-    public function test_plan_swap_succeeds_even_if_payment_fails()
+    public function test_next_action_needed_during_subscribing_results_in_an_exception()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('next_action_needed_during_subscribing_results_in_an_exception');
 
-        $subscription = $user->newSubscription('main', static::$planId)->create($this->getTestToken());
+        try {
+            $user->newSubscription('main', static::$planId)->create('pm_card_threeDSecure2Required');
 
-        // Set a faulty card as the customer's default card.
-        $user->updateCard($this->getInvalidCardToken());
+            $this->fail('Expected exception '.PaymentActionRequired::class.' was not thrown.');
+        } catch (PaymentActionRequired $e) {
+            // Assert that the payment needs an extra action.
+            $this->assertTrue($e->payment->requiresAction());
+
+            // Assert subscription was added to the billable entity.
+            $this->assertInstanceOf(Subscription::class, $subscription = $user->subscription('main'));
+
+            // Assert subscription is incomplete.
+            $this->assertTrue($subscription->incomplete());
+        }
+    }
+
+    public function test_declined_card_during_plan_swap_results_in_an_exception()
+    {
+        $user = $this->createCustomer('declined_card_during_plan_swap_results_in_an_exception');
+
+        $subscription = $user->newSubscription('main', static::$planId)->create('pm_card_visa');
+
+        // Set a faulty card as the customer's default payment method.
+        $user->updateDefaultPaymentMethod('pm_card_chargeCustomerFail');
+
+        try {
+            // Attempt to swap and pay with a faulty card.
+            $subscription = $subscription->swapAndInvoice(static::$premiumPlanId);
+
+            $this->fail('Expected exception '.PaymentFailure::class.' was not thrown.');
+        } catch (PaymentFailure $e) {
+            // Assert that the payment needs a valid payment method.
+            $this->assertTrue($e->payment->requiresPaymentMethod());
+
+            // Assert that the plan was swapped anyway.
+            $this->assertEquals(static::$premiumPlanId, $subscription->refresh()->stripe_plan);
+
+            // Assert subscription is past due.
+            $this->assertTrue($subscription->pastDue());
+        }
+    }
+
+    public function test_next_action_needed_during_plan_swap_results_in_an_exception()
+    {
+        $user = $this->createCustomer('next_action_needed_during_plan_swap_results_in_an_exception');
+
+        $subscription = $user->newSubscription('main', static::$planId)->create('pm_card_visa');
+
+        // Set a card that requires a next action as the customer's default payment method.
+        $user->updateDefaultPaymentMethod('pm_card_threeDSecure2Required');
+
+        try {
+            // Attempt to swap and pay with a faulty card.
+            $subscription = $subscription->swapAndInvoice(static::$premiumPlanId);
+
+            $this->fail('Expected exception '.PaymentActionRequired::class.' was not thrown.');
+        } catch (PaymentActionRequired $e) {
+            // Assert that the payment needs an extra action.
+            $this->assertTrue($e->payment->requiresAction());
+
+            // Assert that the plan was swapped anyway.
+            $this->assertEquals(static::$premiumPlanId, $subscription->refresh()->stripe_plan);
+
+            // Assert subscription is past due.
+            $this->assertTrue($subscription->pastDue());
+        }
+    }
+
+    public function test_downgrade_with_faulty_card_does_not_incomplete_subscription()
+    {
+        $user = $this->createCustomer('downgrade_with_faulty_card_does_not_incomplete_subscription');
+
+        $subscription = $user->newSubscription('main', static::$premiumPlanId)->create('pm_card_visa');
+
+        // Set a card that requires a next action as the customer's default payment method.
+        $user->updateDefaultPaymentMethod('pm_card_chargeCustomerFail');
 
         // Attempt to swap and pay with a faulty card.
-        $subscription = $subscription->swap(static::$premiumPlanId);
+        $subscription = $subscription->swap(static::$planId);
 
-        // Assert that the plan was swapped.
-        $this->assertEquals(static::$premiumPlanId, $subscription->stripe_plan);
+        // Assert that the plan was swapped anyway.
+        $this->assertEquals(static::$planId, $subscription->refresh()->stripe_plan);
+
+        // Assert subscription is still active.
+        $this->assertTrue($subscription->active());
+    }
+
+    public function test_downgrade_with_3d_secure_does_not_incomplete_subscription()
+    {
+        $user = $this->createCustomer('downgrade_with_3d_secure_does_not_incomplete_subscription');
+
+        $subscription = $user->newSubscription('main', static::$premiumPlanId)->create('pm_card_visa');
+
+        // Set a card that requires a next action as the customer's default payment method.
+        $user->updateDefaultPaymentMethod('pm_card_threeDSecure2Required');
+
+        // Attempt to swap and pay with a faulty card.
+        $subscription = $subscription->swap(static::$planId);
+
+        // Assert that the plan was swapped anyway.
+        $this->assertEquals(static::$planId, $subscription->refresh()->stripe_plan);
+
+        // Assert subscription is still active.
+        $this->assertTrue($subscription->active());
     }
 
     public function test_creating_subscription_with_coupons()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('creating_subscription_with_coupons');
 
         // Create Subscription
         $user->newSubscription('main', static::$planId)
             ->withCoupon(static::$couponId)
-            ->create($this->getTestToken());
+            ->create('pm_card_visa');
 
         $subscription = $user->subscription('main');
 
@@ -345,15 +357,12 @@ class CashierTest extends TestCase
 
     public function test_creating_subscription_with_an_anchored_billing_cycle()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('creating_subscription_with_an_anchored_billing_cycle');
 
         // Create Subscription
         $user->newSubscription('main', static::$planId)
             ->anchorBillingCycleOn(new DateTime('first day of next month'))
-            ->create($this->getTestToken());
+            ->create('pm_card_visa');
 
         $subscription = $user->subscription('main');
 
@@ -380,32 +389,14 @@ class CashierTest extends TestCase
         );
     }
 
-    public function test_generic_trials()
-    {
-        $user = new User;
-
-        $this->assertFalse($user->onGenericTrial());
-
-        $user->trial_ends_at = Carbon::tomorrow();
-
-        $this->assertTrue($user->onGenericTrial());
-
-        $user->trial_ends_at = Carbon::today()->subDays(5);
-
-        $this->assertFalse($user->onGenericTrial());
-    }
-
     public function test_creating_subscription_with_trial()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('creating_subscription_with_trial');
 
         // Create Subscription
         $user->newSubscription('main', static::$planId)
             ->trialDays(7)
-            ->create($this->getTestToken());
+            ->create('pm_card_visa');
 
         $subscription = $user->subscription('main');
 
@@ -436,15 +427,12 @@ class CashierTest extends TestCase
 
     public function test_creating_subscription_with_explicit_trial()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('creating_subscription_with_explicit_trial');
 
         // Create Subscription
         $user->newSubscription('main', static::$planId)
             ->trialUntil(Carbon::tomorrow()->hour(3)->minute(15))
-            ->create($this->getTestToken());
+            ->create('pm_card_visa');
 
         $subscription = $user->subscription('main');
 
@@ -475,14 +463,9 @@ class CashierTest extends TestCase
 
     public function test_applying_coupons_to_existing_customers()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('applying_coupons_to_existing_customers');
 
-        // Create Subscription
-        $user->newSubscription('main', static::$planId)
-            ->create($this->getTestToken());
+        $user->newSubscription('main', static::$planId)->create('pm_card_visa');
 
         $user->applyCoupon(static::$couponId);
 
@@ -491,92 +474,37 @@ class CashierTest extends TestCase
         $this->assertEquals(static::$couponId, $customer->discount->coupon->id);
     }
 
-    public function test_marking_as_cancelled_from_webhook()
-    {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
-
-        $user->newSubscription('main', static::$planId)
-            ->create($this->getTestToken());
-
-        $subscription = $user->subscription('main');
-
-        $request = Request::create('/', 'POST', [], [], [], [], json_encode([
-            'id' => 'foo',
-            'type' => 'customer.subscription.deleted',
-            'data' => [
-                'object' => [
-                    'id' => $subscription->stripe_id,
-                    'customer' => $user->stripe_id,
-                ],
-            ],
-        ]));
-
-        $controller = new CashierTestControllerStub;
-        $response = $controller->handleWebhook($request);
-        $this->assertEquals(200, $response->getStatusCode());
-
-        $user = $user->fresh();
-        $subscription = $user->subscription('main');
-
-        $this->assertTrue($subscription->cancelled());
-    }
-
-    public function test_creating_one_off_invoices()
-    {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
-
-        // Create Invoice
-        $user->createAsStripeCustomer();
-        $user->updateCard($this->getTestToken());
-        $user->invoiceFor('Laravel Cashier', 1000);
-
-        // Invoice Tests
-        $invoice = $user->invoices()[0];
-        $this->assertEquals('$10.00', $invoice->total());
-        $this->assertEquals('Laravel Cashier', $invoice->invoiceItems()[0]->asStripeInvoiceItem()->description);
-    }
-
-    public function test_refunds()
-    {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
-
-        // Create Invoice
-        $user->createAsStripeCustomer();
-        $user->updateCard($this->getTestToken());
-        $invoice = $user->invoiceFor('Laravel Cashier', 1000);
-
-        // Create the refund
-        $refund = $user->refund($invoice->charge);
-
-        // Refund Tests
-        $this->assertEquals(1000, $refund->amount);
-    }
-
     public function test_subscription_state_scopes()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('subscription_state_scopes');
+
+        // Start with an incomplete subscription.
         $subscription = $user->subscriptions()->create([
             'name' => 'yearly',
             'stripe_id' => 'xxxx',
+            'stripe_status' => 'incomplete',
             'stripe_plan' => 'stripe-yearly',
             'quantity' => 1,
             'trial_ends_at' => null,
             'ends_at' => null,
         ]);
 
-        // subscription is active
+        // Subscription is incomplete
+        $this->assertTrue($user->subscriptions()->incomplete()->exists());
+        $this->assertFalse($user->subscriptions()->active()->exists());
+        $this->assertFalse($user->subscriptions()->onTrial()->exists());
+        $this->assertTrue($user->subscriptions()->notOnTrial()->exists());
+        $this->assertTrue($user->subscriptions()->recurring()->exists());
+        $this->assertFalse($user->subscriptions()->cancelled()->exists());
+        $this->assertTrue($user->subscriptions()->notCancelled()->exists());
+        $this->assertFalse($user->subscriptions()->onGracePeriod()->exists());
+        $this->assertTrue($user->subscriptions()->notOnGracePeriod()->exists());
+        $this->assertFalse($user->subscriptions()->ended()->exists());
+
+        // Activate.
+        $subscription->update(['stripe_status' => 'active']);
+
+        $this->assertFalse($user->subscriptions()->incomplete()->exists());
         $this->assertTrue($user->subscriptions()->active()->exists());
         $this->assertFalse($user->subscriptions()->onTrial()->exists());
         $this->assertTrue($user->subscriptions()->notOnTrial()->exists());
@@ -587,9 +515,10 @@ class CashierTest extends TestCase
         $this->assertTrue($user->subscriptions()->notOnGracePeriod()->exists());
         $this->assertFalse($user->subscriptions()->ended()->exists());
 
-        // put on trial
+        // Put on trial.
         $subscription->update(['trial_ends_at' => Carbon::now()->addDay()]);
 
+        $this->assertFalse($user->subscriptions()->incomplete()->exists());
         $this->assertTrue($user->subscriptions()->active()->exists());
         $this->assertTrue($user->subscriptions()->onTrial()->exists());
         $this->assertFalse($user->subscriptions()->notOnTrial()->exists());
@@ -600,9 +529,10 @@ class CashierTest extends TestCase
         $this->assertTrue($user->subscriptions()->notOnGracePeriod()->exists());
         $this->assertFalse($user->subscriptions()->ended()->exists());
 
-        // put on grace period
+        // Put on grace period.
         $subscription->update(['ends_at' => Carbon::now()->addDay()]);
 
+        $this->assertFalse($user->subscriptions()->incomplete()->exists());
         $this->assertTrue($user->subscriptions()->active()->exists());
         $this->assertTrue($user->subscriptions()->onTrial()->exists());
         $this->assertFalse($user->subscriptions()->notOnTrial()->exists());
@@ -613,9 +543,10 @@ class CashierTest extends TestCase
         $this->assertFalse($user->subscriptions()->notOnGracePeriod()->exists());
         $this->assertFalse($user->subscriptions()->ended()->exists());
 
-        // end subscription
+        // End subscription.
         $subscription->update(['ends_at' => Carbon::now()->subDay()]);
 
+        $this->assertFalse($user->subscriptions()->incomplete()->exists());
         $this->assertFalse($user->subscriptions()->active()->exists());
         $this->assertTrue($user->subscriptions()->onTrial()->exists());
         $this->assertFalse($user->subscriptions()->notOnTrial()->exists());
@@ -627,65 +558,19 @@ class CashierTest extends TestCase
         $this->assertTrue($user->subscriptions()->ended()->exists());
     }
 
-    public function test_update_stripe_customer()
+    public function test_retrieve_the_latest_payment_for_a_subscription()
     {
-        $user = User::create([
-            'email' => 'taylor@laravel.com',
-            'name' => 'Taylor Otwell',
-        ]);
+        $user = $this->createCustomer('retrieve_the_latest_payment_for_a_subscription');
 
-        $user->createAsStripeCustomer();
+        try {
+            $user->newSubscription('main', static::$planId)->create('pm_card_threeDSecure2Required');
 
-        // Update the customers email
-        $customer = $user->updateStripeCustomer(['email' => 'test@laravel.com']);
+            $this->fail('Expected exception '.PaymentActionRequired::class.' was not thrown.');
+        } catch (PaymentActionRequired $e) {
+            $subscription = $user->refresh()->subscription('main');
 
-        $this->assertEquals('test@laravel.com', $customer->email);
-    }
-
-    protected function getTestToken()
-    {
-        return Token::create([
-            'card' => [
-                'number' => '4242424242424242',
-                'exp_month' => 5,
-                'exp_year' => date('Y') + 1,
-                'cvc' => '123',
-            ],
-        ])->id;
-    }
-
-    protected function getInvalidCardToken()
-    {
-        return Token::create([
-            'card' => [
-                'number' => '4000 0000 0000 0341',
-                'exp_month' => 5,
-                'exp_year' => date('Y') + 1,
-                'cvc' => '123',
-            ],
-        ])->id;
-    }
-
-    protected function schema(): Builder
-    {
-        return $this->connection()->getSchemaBuilder();
-    }
-
-    protected function connection(): ConnectionInterface
-    {
-        return Eloquent::getConnectionResolver()->connection();
-    }
-}
-
-class User extends Eloquent
-{
-    use Billable;
-}
-
-class CashierTestControllerStub extends WebhookController
-{
-    public function __construct()
-    {
-        // Prevent setting middleware...
+            $this->assertInstanceOf(Payment::class, $payment = $subscription->latestPayment());
+            $this->assertTrue($payment->requiresAction());
+        }
     }
 }

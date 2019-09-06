@@ -2,24 +2,27 @@
 
 namespace Laravel\Cashier;
 
-use Exception;
-use Illuminate\Support\Str;
+use Money\Money;
+use Money\Currency;
+use NumberFormatter;
+use Money\Currencies\ISOCurrencies;
+use Money\Formatter\IntlMoneyFormatter;
 
 class Cashier
 {
     /**
-     * The current currency.
+     * The Cashier library version.
      *
      * @var string
      */
-    protected static $currency = 'usd';
+    const VERSION = '10.2.0';
 
     /**
-     * The current currency symbol.
+     * The Stripe API version.
      *
      * @var string
      */
-    protected static $currencySymbol = '$';
+    const STRIPE_VERSION = '2019-08-14';
 
     /**
      * The custom currency formatter.
@@ -29,82 +32,31 @@ class Cashier
     protected static $formatCurrencyUsing;
 
     /**
-     * Get the class name of the billable model.
+     * Indicates if Cashier migrations will be run.
      *
-     * @return string
+     * @var bool
      */
-    public static function stripeModel()
-    {
-        return getenv('STRIPE_MODEL') ?: config('services.stripe.model', 'App\\User');
-    }
+    public static $runsMigrations = true;
 
     /**
-     * Set the currency to be used when billing Stripe models.
+     * Indicates if Cashier routes will be registered.
      *
-     * @param  string  $currency
-     * @param  string|null  $symbol
-     * @return void
-     * @throws \Exception
+     * @var bool
      */
-    public static function useCurrency($currency, $symbol = null)
-    {
-        static::$currency = $currency;
-
-        static::useCurrencySymbol($symbol ?: static::guessCurrencySymbol($currency));
-    }
+    public static $registersRoutes = true;
 
     /**
-     * Guess the currency symbol for the given currency.
+     * Get the default Stripe API options.
      *
-     * @param  string  $currency
-     * @return string
-     * @throws \Exception
+     * @param  array  $options
+     * @return array
      */
-    protected static function guessCurrencySymbol($currency)
+    public static function stripeOptions(array $options = [])
     {
-        switch (strtolower($currency)) {
-            case 'usd':
-            case 'aud':
-            case 'cad':
-                return '$';
-            case 'eur':
-                return '€';
-            case 'gbp':
-                return '£';
-            default:
-                throw new Exception('Unable to guess symbol for currency. Please explicitly specify it.');
-        }
-    }
-
-    /**
-     * Get the currency currently in use.
-     *
-     * @return string
-     */
-    public static function usesCurrency()
-    {
-        return static::$currency;
-    }
-
-    /**
-     * Set the currency symbol to be used when formatting currency.
-     *
-     * @param  string  $symbol
-     * @return void
-     */
-    public static function useCurrencySymbol($symbol)
-    {
-        static::$currencySymbol = $symbol;
-    }
-
-    /**
-     * Get the currency symbol currently in use.
-     *
-     * @return string
-     */
-    public static function usesCurrencySymbol()
-    {
-        return static::$currencySymbol;
+        return array_merge([
+            'api_key' => config('cashier.secret'),
+            'stripe_version' => static::STRIPE_VERSION,
+        ], $options);
     }
 
     /**
@@ -122,20 +74,44 @@ class Cashier
      * Format the given amount into a displayable currency.
      *
      * @param  int  $amount
+     * @param  string|null  $currency
      * @return string
      */
-    public static function formatAmount($amount)
+    public static function formatAmount($amount, $currency = null)
     {
         if (static::$formatCurrencyUsing) {
-            return call_user_func(static::$formatCurrencyUsing, $amount);
+            return call_user_func(static::$formatCurrencyUsing, $amount, $currency);
         }
 
-        $amount = number_format($amount / 100, 2);
+        $money = new Money($amount, new Currency(strtoupper($currency ?? config('cashier.currency'))));
 
-        if (Str::startsWith($amount, '-')) {
-            return '-'.static::usesCurrencySymbol().ltrim($amount, '-');
-        }
+        $numberFormatter = new NumberFormatter(config('cashier.currency_locale'), NumberFormatter::CURRENCY);
+        $moneyFormatter = new IntlMoneyFormatter($numberFormatter, new ISOCurrencies());
 
-        return static::usesCurrencySymbol().$amount;
+        return $moneyFormatter->format($money);
+    }
+
+    /**
+     * Configure Cashier to not register its migrations.
+     *
+     * @return static
+     */
+    public static function ignoreMigrations()
+    {
+        static::$runsMigrations = false;
+
+        return new static;
+    }
+
+    /**
+     * Configure Cashier to not register its routes.
+     *
+     * @return static
+     */
+    public static function ignoreRoutes()
+    {
+        static::$registersRoutes = false;
+
+        return new static;
     }
 }

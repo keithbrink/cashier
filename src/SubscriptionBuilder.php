@@ -4,7 +4,6 @@ namespace Laravel\Cashier;
 
 use Carbon\Carbon;
 use DateTimeInterface;
-use Laravel\Cashier\Exceptions\SubscriptionCreationFailed;
 
 class SubscriptionBuilder
 {
@@ -221,22 +220,16 @@ class SubscriptionBuilder
     /**
      * Create a new Stripe subscription.
      *
-     * @param string|null $token
-     * @param array       $options
-     *
+     * @param  \Stripe\PaymentMethod|string|null  $paymentMethod
+     * @param  array  $options
      * @return \Laravel\Cashier\Subscription
      */
-    public function create($token = null, array $options = [])
+    public function create($paymentMethod = null, array $options = [])
     {
-        $customer = $this->getStripeCustomer($token, $options);
+        $customer = $this->getStripeCustomer($paymentMethod, $options);
 
-        $subscription = $customer->subscriptions->create($this->buildPayload());
-
-        if (in_array($subscription->status, ['incomplete', 'incomplete_expired'])) {
-            $subscription->cancel();
-
-            throw SubscriptionCreationFailed::incomplete($subscription);
-        }
+        /** @var \Stripe\Subscription $stripeSubscription */
+        $stripeSubscription = $customer->subscriptions->create($this->buildPayload());
 
         if ($this->skipTrial) {
             $trialEndsAt = null;
@@ -244,34 +237,38 @@ class SubscriptionBuilder
             $trialEndsAt = $this->trialExpires;
         }
 
-        return $this->owner->subscriptions()->create([
+        $subscription = $this->owner->subscriptions()->create([
             'name' => $this->name,
-            'stripe_id' => $subscription->id,
+            'stripe_id' => $stripeSubscription->id,
+            'stripe_status' => $stripeSubscription->status,
             'stripe_plan' => $this->plan,
             'quantity' => $this->quantity,
             'trial_ends_at' => $trialEndsAt,
             'ends_at' => null,
         ]);
+
+        if ($subscription->incomplete()) {
+            (new Payment(
+                $stripeSubscription->latest_invoice->payment_intent
+            ))->validate();
+        }
+
+        return $subscription;
     }
 
     /**
-     * Get the Stripe customer instance for the current user and token.
+     * Get the Stripe customer instance for the current user and payment method.
      *
-     * @param string|null $token
-     * @param array       $options
-     *
+     * @param  \Stripe\PaymentMethod|string|null  $paymentMethod
+     * @param  array  $options
      * @return \Stripe\Customer
      */
-    protected function getStripeCustomer($token = null, array $options = [])
+    protected function getStripeCustomer($paymentMethod = null, array $options = [])
     {
-        if ($this->owner->stripe_id) {
-            $customer = $this->owner->asStripeCustomer();
-        } else {
-            $customer = $this->owner->createAsStripeCustomer($options);
-        }
+        $customer = $this->owner->createOrGetStripeCustomer($options);
 
-        if ($token) {
-            $this->owner->updateCard($token);
+        if ($paymentMethod) {
+            $this->owner->updateDefaultPaymentMethod($paymentMethod);
         }
 
         return $customer;
@@ -287,12 +284,13 @@ class SubscriptionBuilder
         return array_filter([
             'billing_cycle_anchor' => $this->billingCycleAnchor,
             'coupon' => $this->coupon,
+            'expand' => ['latest_invoice.payment_intent'],
             'metadata' => $this->metadata,
             'plan' => $this->plan,
             'quantity' => $this->quantity,
             'tax_percent' => $this->getTaxPercentageForPayload(),
             'trial_end' => $this->getTrialEndForPayload(),
-            'application_fee_percent' => $this->application_fee_percent,
+            'off_session' => true,
         ]);
     }
 

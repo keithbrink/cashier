@@ -9,22 +9,24 @@ php:
 
 env:
   matrix:
-    - LARAVEL=5.7.*
     - LARAVEL=5.8.*
-    - LARAVEL=dev-master
+    - LARAVEL=^6.0
+    - LARAVEL=^7.0
 
 matrix:
   fast_finish: true
   exclude:
     - php: 7.1
-      env: LARAVEL=dev-master
+      env: LARAVEL=^6.0
+    - php: 7.1
+      env: LARAVEL=^7.0
   allow_failures:
-    - env: LARAVEL=dev-master
+    - env: LARAVEL=^7.0
 
 before_install:
   - phpenv config-rm xdebug.ini || true
 
 install:
-  - travis_retry composer require "illuminate/contracts=${LARAVEL}" --dev --prefer-dist --no-interaction --no-suggest
+  - travis_retry composer require "illuminate/contracts=${LARAVEL}" --prefer-dist --no-interaction --no-suggest
 
 script: vendor/bin/phpunit --verbose
