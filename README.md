@@ -32,13 +32,20 @@ and then update the Cashier package to use the connect branch of this package:
 }
 ```
 
-Once installed, you can use Cashier like normal, but you can add a billing account:
+The only thing that this package adds is the ability to add an application fee percentage to a subscription, as you can now override the `stripeOptions()` function in your Billable model:
 
 ```bash
-$user->billingAccount($account_id)->subscription('main');
+public function stripeOptions(array $options = [])
+{
+    $options = array_merge($options, [
+        'stripe_account' => 'STRIPE_ACCOUNT_ID',
+    ]);
+
+    return Cashier::stripeOptions($options);
+}
 ```
 
-and an application fee can be added to a subscription:
+When adding a new subscription, you can now add an application fee percentage:
 
 ```bash
 $user
