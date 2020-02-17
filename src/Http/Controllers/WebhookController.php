@@ -2,16 +2,18 @@
 
 namespace Laravel\Cashier\Http\Controllers;
 
-use Illuminate\Support\Str;
 use Illuminate\Http\Request;
-use Laravel\Cashier\Payment;
-use Illuminate\Support\Carbon;
-use Laravel\Cashier\Subscription;
-use Illuminate\Routing\Controller;
 use Illuminate\Notifications\Notifiable;
-use Symfony\Component\HttpFoundation\Response;
-use Stripe\PaymentIntent as StripePaymentIntent;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
+use Laravel\Cashier\Events\WebhookHandled;
+use Laravel\Cashier\Events\WebhookReceived;
 use Laravel\Cashier\Http\Middleware\VerifyWebhookSignature;
+use Laravel\Cashier\Payment;
+use Laravel\Cashier\Subscription;
+use Stripe\PaymentIntent as StripePaymentIntent;
+use Symfony\Component\HttpFoundation\Response;
 
 class WebhookController extends Controller
 {
@@ -38,8 +40,14 @@ class WebhookController extends Controller
         $payload = json_decode($request->getContent(), true);
         $method = 'handle'.Str::studly(str_replace('.', '_', $payload['type']));
 
+        WebhookReceived::dispatch($payload);
+
         if (method_exists($this, $method)) {
-            return $this->{$method}($payload);
+            $response = $this->{$method}($payload);
+
+            WebhookHandled::dispatch($payload);
+
+            return $response;
         }
 
         return $this->missingMethod();

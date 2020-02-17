@@ -3,12 +3,12 @@
 namespace Laravel\Cashier;
 
 use Carbon\Carbon;
-use LogicException;
 use DateTimeInterface;
 use Illuminate\Database\Eloquent\Model;
-use Stripe\Subscription as StripeSubscription;
 use Laravel\Cashier\Exceptions\IncompletePayment;
 use Laravel\Cashier\Exceptions\SubscriptionUpdateFailure;
+use LogicException;
+use Stripe\Subscription as StripeSubscription;
 
 class Subscription extends Model
 {
@@ -82,7 +82,7 @@ class Subscription extends Model
      */
     public function incomplete()
     {
-        return $this->stripe_status === 'incomplete';
+        return $this->stripe_status === StripeSubscription::STATUS_INCOMPLETE;
     }
 
     /**
@@ -93,7 +93,7 @@ class Subscription extends Model
      */
     public function scopeIncomplete($query)
     {
-        $query->where('stripe_status', 'incomplete');
+        $query->where('stripe_status', StripeSubscription::STATUS_INCOMPLETE);
     }
 
     /**
@@ -103,7 +103,7 @@ class Subscription extends Model
      */
     public function pastDue()
     {
-        return $this->stripe_status === 'past_due';
+        return $this->stripe_status === StripeSubscription::STATUS_PAST_DUE;
     }
 
     /**
@@ -114,7 +114,7 @@ class Subscription extends Model
      */
     public function scopePastDue($query)
     {
-        $query->where('stripe_status', 'past_due');
+        $query->where('stripe_status', StripeSubscription::STATUS_PAST_DUE);
     }
 
     /**
@@ -125,10 +125,10 @@ class Subscription extends Model
     public function active()
     {
         return (is_null($this->ends_at) || $this->onGracePeriod()) &&
-            $this->stripe_status !== 'incomplete' &&
-            $this->stripe_status !== 'incomplete_expired' &&
-            $this->stripe_status !== 'past_due' &&
-            $this->stripe_status !== 'unpaid';
+            $this->stripe_status !== StripeSubscription::STATUS_INCOMPLETE &&
+            $this->stripe_status !== StripeSubscription::STATUS_INCOMPLETE_EXPIRED &&
+            (! Cashier::$deactivatePastDue || $this->stripe_status !== StripeSubscription::STATUS_PAST_DUE) &&
+            $this->stripe_status !== StripeSubscription::STATUS_UNPAID;
     }
 
     /**
@@ -144,10 +144,13 @@ class Subscription extends Model
                 ->orWhere(function ($query) {
                     $query->onGracePeriod();
                 });
-        })->where('stripe_status', '!=', 'incomplete')
-            ->where('stripe_status', '!=', 'incomplete_expired')
-            ->where('stripe_status', '!=', 'past_due')
-            ->where('stripe_status', '!=', 'unpaid');
+        })->where('stripe_status', '!=', StripeSubscription::STATUS_INCOMPLETE)
+            ->where('stripe_status', '!=', StripeSubscription::STATUS_INCOMPLETE_EXPIRED)
+            ->where('stripe_status', '!=', StripeSubscription::STATUS_UNPAID);
+
+        if (Cashier::$deactivatePastDue) {
+            $query->where('stripe_status', '!=', StripeSubscription::STATUS_PAST_DUE);
+        }
     }
 
     /**
@@ -553,7 +556,7 @@ class Subscription extends Model
     public function markAsCancelled()
     {
         $this->fill([
-            'stripe_status' => 'canceled',
+            'stripe_status' => StripeSubscription::STATUS_CANCELED,
             'ends_at' => Carbon::now(),
         ])->save();
     }
@@ -562,6 +565,7 @@ class Subscription extends Model
      * Resume the cancelled subscription.
      *
      * @return $this
+     *
      * @throws \LogicException
      */
     public function resume()
@@ -621,15 +625,15 @@ class Subscription extends Model
     }
 
     /**
-     * Sync the tax percentage of the user to the subscription.
+     * Sync the tax rates of the user to the subscription.
      *
      * @return void
      */
-    public function syncTaxPercentage()
+    public function syncTaxRates()
     {
         $subscription = $this->asStripeSubscription();
 
-        $subscription->tax_percent = $this->user->taxPercentage();
+        $subscription->default_tax_rates = $this->user->taxRates();
 
         $subscription->save();
     }

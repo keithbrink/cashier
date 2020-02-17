@@ -4,6 +4,7 @@ namespace Laravel\Cashier;
 
 use Carbon\Carbon;
 use DateTimeInterface;
+use Stripe\Subscription as StripeSubscription;
 
 class SubscriptionBuilder
 {
@@ -197,6 +198,9 @@ class SubscriptionBuilder
      * @param array $options
      *
      * @return \Laravel\Cashier\Subscription
+     *
+     * @throws \Laravel\Cashier\Exceptions\PaymentActionRequired
+     * @throws \Laravel\Cashier\Exceptions\PaymentFailure
      */
     public function add(array $options = [])
     {
@@ -220,17 +224,28 @@ class SubscriptionBuilder
     /**
      * Create a new Stripe subscription.
      *
-     * @param \Stripe\PaymentMethod|string|null $paymentMethod
-     * @param array                             $options
-     *
+     * @param  \Stripe\PaymentMethod|string|null  $paymentMethod
+     * @param  array  $customerOptions
+     * @param  array  $subscriptionOptions
      * @return \Laravel\Cashier\Subscription
+     *
+     * @throws \Laravel\Cashier\Exceptions\PaymentActionRequired
+     * @throws \Laravel\Cashier\Exceptions\PaymentFailure
      */
-    public function create($paymentMethod = null, array $options = [])
+    public function create($paymentMethod = null, array $customerOptions = [], array $subscriptionOptions = [])
     {
-        $customer = $this->getStripeCustomer($paymentMethod, $options);
+        $customer = $this->getStripeCustomer($paymentMethod, $customerOptions);
 
-        /** @var \Stripe\Subscription $stripeSubscription */
-        $stripeSubscription = $customer->subscriptions->create($this->buildPayload());
+        $payload = array_merge(
+            ['customer' => $customer->id],
+            $this->buildPayload(),
+            $subscriptionOptions
+        );
+
+        $stripeSubscription = StripeSubscription::create(
+            $payload,
+            $this->owner->stripeOptions()
+        );
 
         if ($this->skipTrial) {
             $trialEndsAt = null;
@@ -238,6 +253,7 @@ class SubscriptionBuilder
             $trialEndsAt = $this->trialExpires;
         }
 
+        /** @var \Laravel\Cashier\Subscription $subscription */
         $subscription = $this->owner->subscriptions()->create([
             'name' => $this->name,
             'stripe_id' => $stripeSubscription->id,
@@ -290,7 +306,7 @@ class SubscriptionBuilder
             'metadata' => $this->metadata,
             'plan' => $this->plan,
             'quantity' => $this->quantity,
-            'tax_percent' => $this->getTaxPercentageForPayload(),
+            'default_tax_rates' => $this->getTaxRatesForPayload(),
             'trial_end' => $this->getTrialEndForPayload(),
             'application_fee_percent' => $this->application_fee_percent,
             'off_session' => true,
@@ -300,7 +316,7 @@ class SubscriptionBuilder
     /**
      * Get the trial ending date for the Stripe payload.
      *
-     * @return int|null
+     * @return int|string|null
      */
     protected function getTrialEndForPayload()
     {
@@ -314,14 +330,14 @@ class SubscriptionBuilder
     }
 
     /**
-     * Get the tax percentage for the Stripe payload.
+     * Get the tax rates for the Stripe payload.
      *
-     * @return int|float|null
+     * @return array|null
      */
-    protected function getTaxPercentageForPayload()
+    protected function getTaxRatesForPayload()
     {
-        if ($taxPercentage = $this->owner->taxPercentage()) {
-            return $taxPercentage;
+        if ($taxRates = $this->owner->taxRates()) {
+            return $taxRates;
         }
     }
 }

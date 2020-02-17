@@ -1,6 +1,70 @@
 # Release Notes
 
-## [Unreleased](https://github.com/laravel/cashier/compare/v10.2.0...10.0)
+## [Unreleased](https://github.com/laravel/cashier/compare/v10.5.3...master)
+
+### Changed
+- Dropped Laravel 5.8 support ([b6256a2](https://github.com/laravel/cashier/commit/b6256a2a2e486478a26043cb2926dc744dc0a42a))
+
+
+## [v10.5.3 (2020-01-14)](https://github.com/laravel/cashier/compare/v10.5.2...v10.5.3)
+
+### Fixed
+- Fix `findInvoiceOrFail` behavior ([#853](https://github.com/laravel/cashier/pull/853))
+
+
+## [v10.5.2 (2020-01-07)](https://github.com/laravel/cashier/compare/v10.5.1...v10.5.2)
+
+### Changed
+- Assert customer exists before retrieving ([#834](https://github.com/laravel/cashier/pull/834))
+- Simplify refund method ([#837](https://github.com/laravel/cashier/pull/837))
+
+### Fixed
+- Fix typo in exception message ([#846](https://github.com/laravel/cashier/pull/846))
+- Fix overriding notification subject translation ([59faaf3](https://github.com/laravel/cashier/commit/59faaf3d6163de95fd977511121bcee695fb6bbe))
+
+
+## [v10.5.1 (2019-11-26)](https://github.com/laravel/cashier/compare/v10.5.0...v10.5.1)
+
+### Added
+- Symfony 5 support ([#822](https://github.com/laravel/cashier/pull/822))
+
+
+## [v10.5.0 (2019-11-12)](https://github.com/laravel/cashier/compare/v10.4.0...v10.5.0)
+
+### Added
+- Webhook events ([#810](https://github.com/laravel/cashier/pull/810))
+
+### Fixed
+- Add missing `@throws` tags ([#813](https://github.com/laravel/cashier/pull/813))
+- Properly return `null` for find methods ([#817](https://github.com/laravel/cashier/pull/817))
+
+
+## [v10.4.0 (2019-10-29)](https://github.com/laravel/cashier/compare/v10.3.0...v10.4.0)
+
+### Added
+- Add findPaymentMethod method ([#801](https://github.com/laravel/cashier/pull/801))
+- Allow to set past due as active ([#802](https://github.com/laravel/cashier/pull/802))
+
+
+## [v10.3.0 (2019-10-01)](https://github.com/laravel/cashier/compare/v10.2.1...v10.3.0)
+
+### Added
+- Configure Stripe logger ([#790](https://github.com/laravel/cashier/pull/790), [4a53b46](https://github.com/laravel/cashier/commit/4a53b4620ea5a082f3d6e69d881a971889e8c3eb))
+
+### Changed
+- Add language line for full name placeholder ([#782](https://github.com/laravel/cashier/pull/782))
+- Update Stripe SDK to v7 ([#784](https://github.com/laravel/cashier/pull/784))
+- Refactor handling of invalid webhook signatures ([#791](https://github.com/laravel/cashier/pull/791))
+- Remove config repository dependency from webhook middleware ([#793](https://github.com/laravel/cashier/pull/793))
+
+### Fixed
+- Remove extra sign off from `ConfirmPayment` notification ([#779](https://github.com/laravel/cashier/pull/779))
+
+
+## [v10.2.1 (2019-09-10)](https://github.com/laravel/cashier/compare/v10.2.0...v10.2.1)
+
+### Fixed
+- Ensure SVG icons are visible even with a long success or error message ([#772](https://github.com/laravel/cashier/pull/772))
 
 
 ## [v10.2.0 (2019-09-03)](https://github.com/laravel/cashier/compare/v10.1.1...v10.2.0)

@@ -2,12 +2,12 @@
 
 namespace Laravel\Cashier\Tests\Integration;
 
-use Stripe\Stripe;
-use Stripe\ApiResource;
-use Stripe\Error\InvalidRequest;
-use Laravel\Cashier\Tests\TestCase;
-use Laravel\Cashier\Tests\Fixtures\User;
 use Illuminate\Database\Eloquent\Model as Eloquent;
+use Laravel\Cashier\Tests\Fixtures\User;
+use Laravel\Cashier\Tests\TestCase;
+use Stripe\ApiResource;
+use Stripe\Exception\InvalidRequestException;
+use Stripe\Stripe;
 
 abstract class IntegrationTestCase extends TestCase
 {
@@ -38,7 +38,7 @@ abstract class IntegrationTestCase extends TestCase
     {
         try {
             $resource->delete();
-        } catch (InvalidRequest $e) {
+        } catch (InvalidRequestException $e) {
             //
         }
     }

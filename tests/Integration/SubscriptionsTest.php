@@ -2,16 +2,19 @@
 
 namespace Laravel\Cashier\Tests\Integration;
 
-use DateTime;
-use Stripe\Plan;
 use Carbon\Carbon;
-use Stripe\Coupon;
-use Stripe\Product;
+use DateTime;
 use Illuminate\Support\Str;
+use Laravel\Cashier\Cashier;
+use Laravel\Cashier\Exceptions\PaymentActionRequired;
+use Laravel\Cashier\Exceptions\PaymentFailure;
 use Laravel\Cashier\Payment;
 use Laravel\Cashier\Subscription;
-use Laravel\Cashier\Exceptions\PaymentFailure;
-use Laravel\Cashier\Exceptions\PaymentActionRequired;
+use Stripe\Coupon;
+use Stripe\Plan;
+use Stripe\Product;
+use Stripe\Subscription as StripeSubscription;
+use Stripe\TaxRate;
 
 class SubscriptionsTest extends IntegrationTestCase
 {
@@ -39,6 +42,11 @@ class SubscriptionsTest extends IntegrationTestCase
      * @var string
      */
     protected static $couponId;
+
+    /**
+     * @var string
+     */
+    protected static $taxRateId;
 
     public static function setUpBeforeClass(): void
     {
@@ -93,6 +101,14 @@ class SubscriptionsTest extends IntegrationTestCase
             'duration_in_months' => 3,
             'currency' => 'USD',
         ]);
+
+        static::$taxRateId = TaxRate::create([
+            'display_name' => 'VAT',
+            'description' => 'VAT Belgium',
+            'jurisdiction' => 'BE',
+            'percentage' => 21,
+            'inclusive' => false,
+        ])->id;
     }
 
     public static function tearDownAfterClass(): void
@@ -104,6 +120,7 @@ class SubscriptionsTest extends IntegrationTestCase
         static::deleteStripeResource(new Plan(static::$premiumPlanId));
         static::deleteStripeResource(new Product(static::$productId));
         static::deleteStripeResource(new Coupon(static::$couponId));
+        static::deleteStripeResource(new Coupon(static::$taxRateId));
     }
 
     public function test_subscriptions_can_be_created()
@@ -556,6 +573,20 @@ class SubscriptionsTest extends IntegrationTestCase
         $this->assertFalse($user->subscriptions()->onGracePeriod()->exists());
         $this->assertTrue($user->subscriptions()->notOnGracePeriod()->exists());
         $this->assertTrue($user->subscriptions()->ended()->exists());
+
+        // Enable past_due as active state.
+        $this->assertFalse($subscription->active());
+        $this->assertFalse($user->subscriptions()->active()->exists());
+
+        Cashier::keepPastDueSubscriptionsActive();
+
+        $subscription->update(['ends_at' => null, 'stripe_status' => StripeSubscription::STATUS_PAST_DUE]);
+
+        $this->assertTrue($subscription->active());
+        $this->assertTrue($user->subscriptions()->active()->exists());
+
+        // Reset deactivate past due state to default to not conflict with other tests.
+        Cashier::$deactivatePastDue = true;
     }
 
     public function test_retrieve_the_latest_payment_for_a_subscription()
@@ -572,5 +603,29 @@ class SubscriptionsTest extends IntegrationTestCase
             $this->assertInstanceOf(Payment::class, $payment = $subscription->latestPayment());
             $this->assertTrue($payment->requiresAction());
         }
+    }
+
+    public function test_subscriptions_with_tax_rates_can_be_created()
+    {
+        $user = $this->createCustomer('subscriptions_with_tax_rates_can_be_created');
+        $user->taxRates = [self::$taxRateId];
+
+        $subscription = $user->newSubscription('main', static::$planId)->create('pm_card_visa');
+        $stripeSubscription = $subscription->asStripeSubscription();
+
+        $this->assertEquals([self::$taxRateId], [$stripeSubscription->default_tax_rates[0]->id]);
+    }
+
+    public function test_subscriptions_with_options_can_be_created()
+    {
+        $user = $this->createCustomer('subscriptions_with_options_can_be_created');
+
+        $backdateStartDate = now()->subMonth()->getTimestamp();
+        $subscription = $user->newSubscription('main', static::$planId)->create('pm_card_visa', [], [
+            'backdate_start_date' => $backdateStartDate,
+        ]);
+        $stripeSubscription = $subscription->asStripeSubscription();
+
+        $this->assertEquals($backdateStartDate, $stripeSubscription->start_date);
     }
 }

@@ -2,11 +2,11 @@
 
 namespace Laravel\Cashier;
 
-use Money\Money;
-use Money\Currency;
-use NumberFormatter;
 use Money\Currencies\ISOCurrencies;
+use Money\Currency;
 use Money\Formatter\IntlMoneyFormatter;
+use Money\Money;
+use NumberFormatter;
 
 class Cashier
 {
@@ -15,14 +15,14 @@ class Cashier
      *
      * @var string
      */
-    const VERSION = '10.2.0';
+    const VERSION = '11.0.0-dev';
 
     /**
      * The Stripe API version.
      *
      * @var string
      */
-    const STRIPE_VERSION = '2019-08-14';
+    const STRIPE_VERSION = '2019-12-03';
 
     /**
      * The custom currency formatter.
@@ -44,6 +44,13 @@ class Cashier
      * @var bool
      */
     public static $registersRoutes = true;
+
+    /**
+     * Indicates if Cashier will mark past due subscriptions as inactive.
+     *
+     * @var bool
+     */
+    public static $deactivatePastDue = true;
 
     /**
      * Get the default Stripe API options.
@@ -111,6 +118,18 @@ class Cashier
     public static function ignoreRoutes()
     {
         static::$registersRoutes = false;
+
+        return new static;
+    }
+
+    /**
+     * Configure Cashier to maintain past due subscriptions as active.
+     *
+     * @return static
+     */
+    public static function keepPastDueSubscriptionsActive()
+    {
+        static::$deactivatePastDue = false;
 
         return new static;
     }

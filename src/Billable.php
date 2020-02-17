@@ -3,20 +3,22 @@
 namespace Laravel\Cashier;
 
 use Exception;
-use Stripe\Card as StripeCard;
 use Illuminate\Support\Collection;
-use Stripe\Invoice as StripeInvoice;
-use Stripe\Customer as StripeCustomer;
+use Laravel\Cashier\Exceptions\InvalidInvoice;
+use Laravel\Cashier\Exceptions\InvalidStripeCustomer;
 use Stripe\BankAccount as StripeBankAccount;
+use Stripe\Card as StripeCard;
+use Stripe\Customer as StripeCustomer;
+use Stripe\Exception\CardException as StripeCardException;
+use Stripe\Exception\InvalidRequestException as StripeInvalidRequestException;
+use Stripe\Invoice as StripeInvoice;
 use Stripe\InvoiceItem as StripeInvoiceItem;
-use Stripe\SetupIntent as StripeSetupIntent;
-use Stripe\Error\Card as StripeCardException;
 use Stripe\PaymentIntent as StripePaymentIntent;
 use Stripe\PaymentMethod as StripePaymentMethod;
-use Laravel\Cashier\Exceptions\InvalidStripeCustomer;
-use Stripe\Error\InvalidRequest as StripeErrorInvalidRequest;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Stripe\Refund as StripeRefund;
+use Stripe\SetupIntent as StripeSetupIntent;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 trait Billable
 {
@@ -61,9 +63,10 @@ trait Billable
      */
     public function refund($paymentIntent, array $options = [])
     {
-        $intent = StripePaymentIntent::retrieve($paymentIntent, $this->stripeOptions());
-
-        return $intent->charges->data[0]->refund($options);
+        return StripeRefund::create(
+            ['payment_intent' => $paymentIntent] + $options,
+            $this->stripeOptions()
+        );
     }
 
     /**
@@ -236,7 +239,7 @@ trait Billable
             $stripeInvoice = $stripeInvoice->pay();
 
             return new Invoice($this, $stripeInvoice);
-        } catch (StripeErrorInvalidRequest $e) {
+        } catch (StripeInvalidRequestException $exception) {
             return false;
         } catch (StripeCardException $exception) {
             $payment = new Payment(
@@ -263,7 +266,8 @@ trait Billable
             $stripeInvoice = StripeInvoice::upcoming(['customer' => $this->stripe_id], $this->stripeOptions());
 
             return new Invoice($this, $stripeInvoice);
-        } catch (StripeErrorInvalidRequest $e) {
+        } catch (StripeInvalidRequestException $exception) {
+            //
         }
     }
 
@@ -276,18 +280,17 @@ trait Billable
      */
     public function findInvoice($id)
     {
+        $stripeInvoice = null;
+
         try {
             $stripeInvoice = StripeInvoice::retrieve(
                 $id, $this->stripeOptions()
             );
-
-            $stripeInvoice->lines = StripeInvoice::retrieve($id, $this->stripeOptions())
-                        ->lines
-                        ->all(['limit' => 1000]);
-
-            return new Invoice($this, $stripeInvoice);
-        } catch (Exception $e) {
+        } catch (Exception $exception) {
+            //
         }
+
+        return $stripeInvoice ? new Invoice($this, $stripeInvoice) : null;
     }
 
     /**
@@ -299,14 +302,14 @@ trait Billable
      */
     public function findInvoiceOrFail($id)
     {
-        $invoice = $this->findInvoice($id);
+        try {
+            $invoice = $this->findInvoice($id);
+        } catch (InvalidInvoice $exception) {
+            throw new AccessDeniedHttpException;
+        }
 
         if (is_null($invoice)) {
             throw new NotFoundHttpException();
-        }
-
-        if ($invoice->customer !== $this->stripe_id) {
-            throw new AccessDeniedHttpException();
         }
 
         return $invoice;
@@ -341,7 +344,10 @@ trait Billable
 
         $parameters = array_merge(['limit' => 24], $parameters);
 
-        $stripeInvoices = $this->asStripeCustomer()->invoices($parameters);
+        $stripeInvoices = StripeInvoice::all(
+            ['customer' => $this->stripe_id] + $parameters,
+            $this->stripeOptions()
+        );
 
         // Here we will loop through the Stripe invoices and create our own custom Invoice
         // instances that have more helper methods and are generally more convenient to
@@ -383,13 +389,23 @@ trait Billable
     }
 
     /**
-     * Determines if the customer currently has a payment method.
+     * Determines if the customer currently has a default payment method.
+     *
+     * @return bool
+     */
+    public function hasDefaultPaymentMethod()
+    {
+        return (bool) $this->card_brand;
+    }
+
+    /**
+     * Determines if the customer currently has at least one payment method.
      *
      * @return bool
      */
     public function hasPaymentMethod()
     {
-        return (bool) $this->card_brand;
+        return $this->paymentMethods()->isNotEmpty();
     }
 
     /**
@@ -448,22 +464,22 @@ trait Billable
 
         $stripePaymentMethod = $this->resolveStripePaymentMethod($paymentMethod);
 
-        if ($stripePaymentMethod->customer === $this->stripe_id) {
-            $stripePaymentMethod->detach(null, $this->stripeOptions());
+        if ($stripePaymentMethod->customer !== $this->stripe_id) {
+            return;
+        }
 
-            $customer = $this->asStripeCustomer();
+        $customer = $this->asStripeCustomer();
 
-            // If payment method was the default payment method, we'll remove it manually...
-            if ($stripePaymentMethod->id === $customer->invoice_settings->default_payment_method) {
-                $customer->invoice_settings = ['default_payment_method' => null];
+        $defaultPaymentMethod = $customer->invoice_settings->default_payment_method;
 
-                $customer->save($this->stripeOptions());
+        $stripePaymentMethod->detach(null, $this->stripeOptions());
 
-                $this->forceFill([
-                    'card_brand' => null,
-                    'card_last_four' => null,
-                ])->save();
-            }
+        // If the payment method was the default payment method, we'll remove it manually...
+        if ($stripePaymentMethod->id === $defaultPaymentMethod) {
+            $this->forceFill([
+                'card_brand' => null,
+                'card_last_four' => null,
+            ])->save();
         }
     }
 
@@ -607,6 +623,25 @@ trait Billable
         });
 
         $this->updateDefaultPaymentMethodFromStripe();
+    }
+
+    /**
+     * Find a PaymentMethod by ID.
+     *
+     * @param  string  $paymentMethod
+     * @return \Laravel\Cashier\PaymentMethod|null
+     */
+    public function findPaymentMethod($paymentMethod)
+    {
+        $stripePaymentMethod = null;
+
+        try {
+            $stripePaymentMethod = $this->resolveStripePaymentMethod($paymentMethod);
+        } catch (Exception $exception) {
+            //
+        }
+
+        return $stripePaymentMethod ? new PaymentMethod($this, $stripePaymentMethod) : null;
     }
 
     /**
@@ -768,6 +803,8 @@ trait Billable
      */
     public function asStripeCustomer()
     {
+        $this->assertCustomerExists();
+
         return StripeCustomer::retrieve($this->stripe_id, $this->stripeOptions());
     }
 
@@ -782,13 +819,43 @@ trait Billable
     }
 
     /**
-     * Get the tax percentage to apply to the subscription.
+     * Get the tax rates to apply to the subscription.
      *
-     * @return int|float
+     * @return array
      */
-    public function taxPercentage()
+    public function taxRates()
     {
-        return 0;
+        return [];
+    }
+
+    /**
+     * Determine if the customer is not exempted from taxes.
+     *
+     * @return bool
+     */
+    public function isNotTaxExempt()
+    {
+        return $this->asStripeCustomer()->tax_exempt === StripeCustomer::TAX_EXEMPT_NONE;
+    }
+
+    /**
+     * Determine if the customer is exempted from taxes.
+     *
+     * @return bool
+     */
+    public function isTaxExempt()
+    {
+        return $this->asStripeCustomer()->tax_exempt === StripeCustomer::TAX_EXEMPT_EXEMPT;
+    }
+
+    /**
+     * Determine if reverse charge applies to the customer.
+     *
+     * @return bool
+     */
+    public function reverseChargeApplies()
+    {
+        return $this->asStripeCustomer()->tax_exempt === StripeCustomer::TAX_EXEMPT_REVERSE;
     }
 
     /**

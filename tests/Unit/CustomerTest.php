@@ -3,8 +3,9 @@
 namespace Laravel\Cashier\Tests\Unit;
 
 use Carbon\Carbon;
-use PHPUnit\Framework\TestCase;
+use Laravel\Cashier\Exceptions\InvalidStripeCustomer;
 use Laravel\Cashier\Tests\Fixtures\User;
+use PHPUnit\Framework\TestCase;
 
 class CustomerTest extends TestCase
 {
@@ -28,11 +29,11 @@ class CustomerTest extends TestCase
         $user = new User;
         $user->card_brand = 'visa';
 
-        $this->assertTrue($user->hasPaymentMethod());
+        $this->assertTrue($user->hasDefaultPaymentMethod());
 
         $user = new User;
 
-        $this->assertFalse($user->hasPaymentMethod());
+        $this->assertFalse($user->hasDefaultPaymentMethod());
     }
 
     public function test_default_payment_method_returns_null_when_the_user_is_not_a_customer_yet()
@@ -40,5 +41,14 @@ class CustomerTest extends TestCase
         $user = new User;
 
         $this->assertNull($user->defaultPaymentMethod());
+    }
+
+    public function test_stripe_customer_method_throws_exception_when_stripe_id_is_not_set()
+    {
+        $user = new User;
+
+        $this->expectException(InvalidStripeCustomer::class);
+
+        $user->asStripeCustomer();
     }
 }
