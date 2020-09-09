@@ -1,3 +1,8 @@
+## This Fork Is Depreciated
+You can now pass arbitrary options to both the billable model and the subscription object using Cashier 10+, meaning you can use Stripe Connect just by passing in the account ID to the billable model `stripeOptions` and application fees to a subscription. 
+
+I will no longer be maintaining this fork.
+
 <p align="center"><img src="https://laravel.com/assets/img/components/logo-cashier.svg"></p>
 
 <p align="center">
